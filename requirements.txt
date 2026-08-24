@@ -1,0 +1,8 @@
+# Everything this app needs beyond the Python standard library.
+# PyCharm should offer to install these for you when you open the folder.
+# If it doesn't: Terminal tab, then  pip install -r requirements.txt
+#
+# NOTE: the package is "pyserial", not "serial". "serial" is a different,
+# unrelated package and installing it will break the app in a confusing way.
+pyserial>=3.5
+openpyxl>=3.1
