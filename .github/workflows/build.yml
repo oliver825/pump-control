@@ -1,0 +1,64 @@
+name: Build apps
+
+# Runs when you push a version tag like v1.0, and also on demand from the
+# Actions tab. GitHub builds on a real Windows machine and a real Mac, then
+# attaches both to a Release. You never need a Mac yourself.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyinstaller pyserial openpyxl
+      - run: >
+          pyinstaller --onefile --windowed --clean --noconfirm
+          --name PumpControl
+          --hidden-import serial.tools.list_ports_windows
+          pump_app.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/PumpControl.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyinstaller pyserial openpyxl
+      - run: >
+          pyinstaller --windowed --clean --noconfirm
+          --name PumpControl
+          --hidden-import serial.tools.list_ports_posix
+          pump_app.py
+      # A .app is a folder, so zip it or the download is unusable.
+      - run: ditto -c -k --keepParent dist/PumpControl.app dist/PumpControl-mac.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/PumpControl-mac.zip
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - run: gh release create "$GITHUB_REF_NAME" artifacts/windows/PumpControl.exe artifacts/macos/PumpControl-mac.zip --generate-notes --title "$GITHUB_REF_NAME"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
