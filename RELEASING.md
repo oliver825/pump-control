@@ -27,6 +27,54 @@ is private, email them the file directly instead of making the repo public.
 
 ---
 
+## No Git installed? Do the whole thing in your browser
+
+You do not need Git, PyCharm, or any command line. Skip to the browser method
+below and ignore Parts 1 to 3.
+
+**Step A.** On github.com click the **+** top right, then **New repository**.
+Name it `pump-control`, choose **Private**, click **Create repository**.
+
+**Step B.** On the empty repo page click **uploading an existing file**. Open
+`C:\Pump Software` in Explorer and drag these in:
+
+```
+pump_app.py          wm323.py          sequence.py
+test_connection.py   requirements.txt  README.md
+SETUP.md             RELEASING.md      build_exe.bat
+build_mac.command    RUN_ME.bat        TEST_CONNECTION.bat
+```
+
+**Do not upload** the `logs` folder, the `.venv` folder, `__pycache__`, or any
+`.xlsx` spreadsheet. Those are run output, program plumbing and experimental
+data. `.gitignore` only keeps those out when you use Git properly, so when
+dragging files in by hand it is on you to leave them out.
+
+Scroll down, click **Commit changes**.
+
+**Step C.** The build file lives in a hidden folder Windows will not show you,
+so create it in the browser instead. Click **Add file > Create new file**. In
+the name box type exactly:
+
+```
+.github/workflows/build.yml
+```
+
+Typing the slashes creates the folders automatically. Paste in the contents of
+`build.yml`, scroll down, **Commit changes**.
+
+**Step D.** Click **Releases** on the right of the repo page, then **Create a
+new release**. Click **Choose a tag**, type `v1.0`, click **Create new tag**.
+Title `v1.0`. Click **Publish release**.
+
+**Step E.** Click the **Actions** tab. A build is running. Give it five
+minutes, then go back to Releases and refresh. `PumpControl.exe` and
+`PumpControl-mac.zip` are now attached.
+
+For the next version, repeat Step D with `v1.1`.
+
+---
+
 ## Part 1: Create the repository
 
 1. Make a GitHub account at **github.com** if you don't have one.
@@ -88,10 +136,8 @@ cause is a typo in a filename.
 Click the **Releases** link on the right-hand side of your repo page, or go to
 the **Code** tab and look for "Releases".
 
-You'll see `v1.0` with two files attached:
-
-- **PumpControl.exe** for Windows
-- **PumpControl-mac.zip** for Mac
+You'll see `v1.0` with the built apps attached: `PumpControl.exe` for
+Windows, plus a zip for each kind of Mac.
 
 Those are permanent download links. Send them to whoever needs the app.
 
@@ -109,40 +155,69 @@ if you ever need to know which version produced a given run.
 
 ## Part 5: What the person downloading it has to do
 
-**Windows.** Download `PumpControl.exe`, put it in a normal folder like
+You get three files on the release page. Send people the right one.
+
+| File | For |
+|---|---|
+| `PumpControl.exe` | Windows |
+| `PumpControl-mac-AppleSilicon.zip` | Macs from 2020 onwards (M1, M2, M3, M4) |
+| `PumpControl-mac-Intel.zip` | Older Intel Macs |
+
+To check which Mac someone has: Apple menu, About This Mac. It says either
+"Apple M..." or "Intel".
+
+**Windows.** Download the .exe, put it in a normal folder like
 `C:\PumpControl`, double-click.
 
-- Windows SmartScreen will say "Windows protected your PC". Click **More info**
-  then **Run anyway**. This happens because the app isn't code-signed, which
-  costs a few hundred pounds a year. It is not a virus warning.
-- Antivirus may quarantine it outright. PyInstaller single-file apps trip
-  heuristics because self-extracting-then-running is also what malware does.
-- **Don't put it in Program Files.** It writes report files next to itself and
-  that folder needs admin rights.
+- SmartScreen will say "Windows protected your PC". Click **More info** then
+  **Run anyway**. That happens because the app is not code-signed, which costs
+  a few hundred pounds a year. It is not a virus warning, though it looks like
+  one.
+- Antivirus may quarantine it. Single-file PyInstaller apps trip heuristics
+  because self-extracting-then-running is also what malware does.
 
-**Mac.** Download `PumpControl-mac.zip`, double-click to unzip, drag
-`PumpControl.app` to Applications.
+**Mac.** Download the zip, double-click to unzip, drag `PumpControl.app` to
+Applications.
 
 - **First launch: right-click the app and choose Open**, then click Open in the
-  dialog. Double-clicking it normally will just say the developer cannot be
-  verified and refuse. You only need to do this once.
-- If macOS refuses even then, open Terminal and run:
+  dialog that appears. Double-clicking normally will just say the developer
+  cannot be verified and refuse to run. Once done, it launches normally
+  forever after.
+- If macOS still refuses, open Terminal and run:
   `xattr -dr com.apple.quarantine /Applications/PumpControl.app`
-- The Mac build is Apple Silicon (M1 and later). On an older Intel Mac it will
-  either not launch or run slowly through Rosetta.
-- The pump appears as something like `/dev/tty.usbserial-XXXX` rather than
-  `COM4`. The port dropdown handles that automatically, but you'll likely need
-  the driver for your specific USB-to-serial adapter.
+- The pump shows up as something like `/dev/tty.usbserial-1420` rather than
+  `COM4`. The port dropdown handles that, but you will probably need the macOS
+  driver for your specific USB-to-serial adapter, most often Prolific or FTDI.
+- Reports go to a `logs` folder next to the app. If the app is in
+  `/Applications` and that is not writable, they land in
+  `~/Documents/PumpControl logs` instead. The activity log always states the
+  full path.
 
 ---
 
-## Is a Mac version actually useful?
+## If the Mac builds fail
 
-Worth asking. The pump lives in a lab and lab machines are usually Windows.
-Nothing here is Windows-specific so the Mac build costs nothing to produce, but
-if nobody is going to run it on a Mac, don't spend time testing that path. The
-Windows build is the one that matters.
+They cannot break your Windows release. The Mac job is marked
+`continue-on-error`, and the release step attaches whatever actually got built,
+warning about anything missing. Worst case you get the Windows app and a yellow
+tick instead of a green one.
 
-Whichever you ship, **test the built app before sending it to anyone**. Freezing
-the code into an executable exercises paths the script version never touches,
-and the path handling for report files is one of them.
+The likeliest cause is GitHub retiring a runner image. `macos-13` went in
+December 2025, which is why this uses `macos-15-intel` instead. That one is
+scheduled to disappear in August 2027, after which GitHub drops Intel macOS
+entirely. When that happens, delete these three lines from `build.yml`:
+
+```yaml
+          - runner: macos-15-intel
+            arch: Intel
+```
+
+---
+
+## Nobody has tested the Mac build
+
+Worth saying plainly. The code has no Windows-specific parts, so it should
+work, but "should" is carrying real weight there. Before handing the Mac
+version to anyone, somebody needs to open it on an actual Mac, connect to an
+actual pump, and check a report file gets written. Until that happens, treat
+the Windows build as the real one.

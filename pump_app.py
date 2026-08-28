@@ -75,16 +75,50 @@ MONO    = ("Consolas", 9)
 
 def app_dir() -> str:
     """
-    Where the app lives, for writing report files next to it.
+    The folder the app lives in, used as the default home for report files.
 
-    Run as a script, this is the folder holding pump_app.py. Run as a
-    PyInstaller .exe, __file__ points into a temporary extraction folder that
-    Windows deletes on exit, so reports written there would silently vanish.
-    When frozen, use the folder the .exe itself sits in.
+    Run as a script this is the folder holding pump_app.py.
+
+    Run as a PyInstaller build, __file__ points into a temporary extraction
+    folder the OS deletes on exit, so reports written there would silently
+    vanish. Use the executable's own location instead.
+
+    On macOS the executable sits inside PumpControl.app/Contents/MacOS/.
+    Never write into an .app bundle: it may be read only, and the contents are
+    replaced wholesale when the app is updated. Step back out to the folder
+    holding the bundle so Mac behaves like Windows.
     """
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+    if not getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(__file__))
+
+    base = os.path.dirname(sys.executable)
+    if base.endswith(os.path.join("Contents", "MacOS")):
+        base = os.path.dirname(os.path.dirname(os.path.dirname(base)))
+    return base
+
+
+def reports_dir() -> str:
+    """
+    Default folder for reports: a "logs" folder beside the app.
+
+    Falls back to the user's Documents folder when that is not writable, which
+    happens if the app ends up in Program Files or /Applications. A report in
+    an unexpected place beats a report that could not be written at all, and
+    the activity log states the full path either way.
+    """
+    candidate = os.path.join(app_dir(), "logs")
+    try:
+        os.makedirs(candidate, exist_ok=True)
+        probe = os.path.join(candidate, ".write_test")
+        with open(probe, "w"):
+            pass
+        os.remove(probe)
+        return candidate
+    except OSError:
+        fallback = os.path.join(os.path.expanduser("~"), "Documents",
+                                "PumpControl logs")
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
 
 
 @dataclass
@@ -175,8 +209,7 @@ class Worker(threading.Thread):
                 break
             self._handle(action, kw)
             if action in ("stop", "manual_start", "manual_stop", "set_rpm",
-                          "set_dir", "run_sequence", "pause_sequence",
-                          "resume_sequence", "skip_step"):
+                          "set_dir", "pause_sequence", "resume_sequence"):
                 self._next_poll = 0.0        # re-read the pump on this tick
 
         if not self.pump:
@@ -194,7 +227,11 @@ class Worker(threading.Thread):
         #    never lags behind what the user just did (this matters most for
         #    STOP: nobody should press it and still see RUNNING).
         if now >= self._next_poll:
-            self._next_poll = now + POLL_INTERVAL
+            # Advance on a fixed grid so rows land on 2.0 s boundaries instead
+            # of creeping to 2.1, 2.2... Catch up if we ever fall behind.
+            self._next_poll += POLL_INTERVAL
+            if self._next_poll <= now:
+                self._next_poll = now + POLL_INTERVAL
             self._poll()
 
         # 4. Update the clocks the GUI reads
@@ -391,6 +428,8 @@ class Worker(threading.Thread):
         with self._lock:
             self.state.seq_state = "running"
             self.state.seq_index = -1
+            self.state.run_elapsed = 0.0
+            self.state.step_elapsed = 0.0
         self.log(f"Sequence started - {len(self.seq.steps)} steps, "
                  f"{fmt_duration(self.seq.total_seconds)} total")
         self._advance_step()
@@ -434,7 +473,10 @@ class Worker(threading.Thread):
             self._abort_sequence("command failure")
             return
         self.log(f"Step {idx + 1}/{len(self.seq.steps)} (row {step.row}): {step.label}")
-        self._write_log(note=f"step {idx + 1} start")
+        # Read the pump back BEFORE writing the marker row, otherwise the row
+        # records the pump's previous state and looks like a fault.
+        self._next_poll = time.monotonic() + POLL_INTERVAL
+        self._poll(note=f"step {idx + 1} start")
 
     def _pause_sequence(self):
         with self._lock:
@@ -477,7 +519,7 @@ class Worker(threading.Thread):
             self._close_log()
 
     # -- polling and watchdog ----------------------------------------------
-    def _poll(self):
+    def _poll(self, note=""):
         if not self.pump:
             return
         try:
@@ -504,7 +546,7 @@ class Worker(threading.Thread):
                 self._pump_stop()
         else:
             self._strikes = 0
-            self._write_log()
+            self._write_log(note)
             # Cross-check: is the pump actually doing what we told it to?
             problem = None
             if running_seq and self.seq and 0 <= idx < len(self.seq.steps):
@@ -540,7 +582,7 @@ class Worker(threading.Thread):
             self.log("Report saving is OFF for this run. Nothing will be "
                      "written to disk.", "warn")
             return
-        folder = self.report_dir or os.path.join(app_dir(), "logs")
+        folder = self.report_dir or reports_dir()
         os.makedirs(folder, exist_ok=True)
         stem = "".join(c for c in (self.report_name or "Pump run")
                        if c not in '\\/:*?"<>|').strip() or "Pump run"
@@ -574,13 +616,17 @@ class Worker(threading.Thread):
     def _write_log(self, note=""):
         if not self._csv:
             return
+        # Measure elapsed time here and now rather than reading a field the
+        # tick loop refreshes later. Anything cached is a tick stale at best
+        # and left over from the previous run at worst.
+        elapsed = max(0.0, time.monotonic() - self._run_started)
         with self._lock:
             s = self.state
             step = s.seq_index + 1
             target = (self._effective_rpm(self.seq.steps[s.seq_index])
                       if self.seq and 0 <= s.seq_index < len(self.seq.steps) else "")
             row = [datetime.now().isoformat(timespec="seconds"),
-                   round(s.run_elapsed, 1), step, target,
+                   round(elapsed, 1), step, target,
                    s.actual_rpm, s.actual_dir, int(s.actual_running), note]
         self._csv.writerow(row)
         self._csv_file.flush()
